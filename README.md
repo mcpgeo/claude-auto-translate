@@ -40,6 +40,12 @@ IMPORTANT: Respond to the user in Georgian.
 ეს ფუნქცია ითვლის ფაქტორიალს რეკურსიული მეთოდით...
 ```
 
+## Requirements
+
+- **Python 3.9+** (standard library only, no pip dependencies)
+- **macOS or Linux**
+- **Claude Code** with hooks support
+
 ## Quick Install
 
 ### One-liner
@@ -103,11 +109,14 @@ Each provider can be configured under the `providers` key:
 {
   "providers": {
     "anthropic": {
-      "model": "claude-3-haiku-20240307",
+      "model": "claude-haiku-5-5",
       "timeout_seconds": 15
     },
     "openai": {
       "model": "gpt-4o-mini"
+    },
+    "gemini": {
+      "model": "gemini-3.5-flash-lite"
     }
   }
 }
@@ -213,6 +222,21 @@ The skill automatically preserves:
 1. **Verify installation:**
    ```bash
    cat ~/.claude/settings.json | grep claude-auto-translate
+   ```
+   
+   The hook should appear in a three-level nested structure:
+   ```json
+   {
+     "hooks": {
+       "UserPromptSubmit": [
+         {
+           "hooks": [
+             {"type": "command", "command": "python3 ... || exit 0", "timeout": 15}
+           ]
+         }
+       ]
+     }
+   }
    ```
 
 2. **Restart Claude Code** — Hooks are loaded on startup.

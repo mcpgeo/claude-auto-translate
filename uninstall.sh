@@ -74,6 +74,13 @@ PROJECT_DIR=".claude/$SKILL_NAME"
 #
 # Remove hook from Claude Code settings.json
 #
+# Per Claude Code hooks docs, the configuration has THREE levels of nesting:
+# 1. Hook event (e.g., "UserPromptSubmit")
+# 2. Matcher groups (array of objects with "hooks" arrays)
+# 3. Hook handlers (inside each group's "hooks" array)
+#
+# We remove only our handler, drop empty groups, keep other hooks.
+#
 unregister_hook() {
     local settings_file="$1"
     
@@ -107,40 +114,53 @@ if 'hooks' not in settings:
     sys.exit(0)
 
 modified = False
+removed_count = 0
 
-# Check UserPromptSubmit hooks
+# Check UserPromptSubmit hooks (three-level nesting)
 hook_type = 'UserPromptSubmit'
 if hook_type in settings['hooks']:
-    hooks = settings['hooks'][hook_type]
+    matcher_groups = settings['hooks'][hook_type]
     
-    if isinstance(hooks, list):
-        original_len = len(hooks)
-        # Filter out our hooks
-        new_hooks = []
-        for hook in hooks:
-            if isinstance(hook, dict):
-                cmd = hook.get('command', '')
-            else:
-                cmd = str(hook)
+    if isinstance(matcher_groups, list):
+        # Iterate through matcher groups
+        new_groups = []
+        for group in matcher_groups:
+            if not isinstance(group, dict):
+                new_groups.append(group)
+                continue
             
-            if skill_name not in cmd:
-                new_hooks.append(hook)
+            handlers = group.get('hooks', [])
+            if not isinstance(handlers, list):
+                handlers = [handlers] if handlers else []
+            
+            # Filter out our handlers from this group
+            new_handlers = []
+            for handler in handlers:
+                if isinstance(handler, dict):
+                    cmd = handler.get('command', '')
+                else:
+                    cmd = str(handler)
+                
+                if skill_name not in cmd:
+                    new_handlers.append(handler)
+                else:
+                    removed_count += 1
+                    modified = True
+            
+            # Keep the group only if it still has handlers
+            if new_handlers:
+                group['hooks'] = new_handlers
+                new_groups.append(group)
+            # If group becomes empty, we drop it (don't add to new_groups)
         
-        if len(new_hooks) != original_len:
-            settings['hooks'][hook_type] = new_hooks
-            modified = True
-            print(f"Removed {original_len - len(new_hooks)} hook(s)")
+        if removed_count > 0:
+            print("Removed " + str(removed_count) + " hook(s)")
         
-        # Clean up empty hooks array
-        if not new_hooks:
+        # Update or remove the hook type
+        if new_groups:
+            settings['hooks'][hook_type] = new_groups
+        else:
             del settings['hooks'][hook_type]
-    
-    elif isinstance(hooks, dict):
-        cmd = hooks.get('command', '')
-        if skill_name in cmd:
-            del settings['hooks'][hook_type]
-            modified = True
-            print("Removed hook entry")
 
 # Clean up empty hooks object
 if 'hooks' in settings and not settings['hooks']:
@@ -149,7 +169,7 @@ if 'hooks' in settings and not settings['hooks']:
 if modified:
     with open(settings_file, 'w') as f:
         json.dump(settings, f, indent=2)
-    print(f"Updated {settings_file}")
+    print("Updated " + settings_file)
 else:
     print("No hooks to remove")
 PYTHON_SCRIPT

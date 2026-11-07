@@ -132,11 +132,17 @@ EOF
 #
 # Register hook in Claude Code settings.json
 #
-# Per Claude Code hooks docs:
-# - UserPromptSubmit hooks default to 30 seconds timeout
-# - Hook format: {"type": "command", "command": "...", "timeout": N}
-# - timeout is in seconds (not milliseconds)
-# - Never exit 2 (blocks prompt), so we add || exit 0 failsafe
+# Per Claude Code hooks docs, the configuration has THREE levels of nesting:
+# 1. Hook event (e.g., "UserPromptSubmit")
+# 2. Matcher groups (array of objects, each with optional "matcher" and required "hooks")
+# 3. Hook handlers (the "hooks" array inside each matcher group)
+#
+# Correct structure:
+# "UserPromptSubmit": [{"hooks": [{"type":"command","command":"...","timeout":15}]}]
+#
+# UserPromptSubmit has no matcher support, so we omit the matcher field.
+# timeout is in seconds; set to 15s (above the default 10s request timeout)
+# Never exit 2 (blocks prompt), so we add || exit 0 failsafe
 #
 register_hook() {
     local settings_file="$1"
@@ -174,50 +180,64 @@ except (json.JSONDecodeError, FileNotFoundError):
 if 'hooks' not in settings:
     settings['hooks'] = {}
 
-# Define our hook per Claude Code settings.json schema
+# Define our hook handler per Claude Code settings.json schema
 # timeout is in seconds; set to 15s (above the default 10s request timeout)
-# type: "command" is required for command hooks
-our_hook = {
+our_handler = {
     "type": "command",
     "command": hook_cmd,
     "timeout": 15
 }
 
-# Get or create the UserPromptSubmit hooks array
+# Get or create the UserPromptSubmit matcher groups array
 hook_type = 'UserPromptSubmit'
 if hook_type not in settings['hooks']:
     settings['hooks'][hook_type] = []
 
-# Ensure it's a list
-hooks = settings['hooks'][hook_type]
-if not isinstance(hooks, list):
-    hooks = [hooks] if hooks else []
-    settings['hooks'][hook_type] = hooks
+# Ensure it's a list of matcher groups
+matcher_groups = settings['hooks'][hook_type]
+if not isinstance(matcher_groups, list):
+    matcher_groups = [matcher_groups] if matcher_groups else []
+    settings['hooks'][hook_type] = matcher_groups
 
-# Check if our hook is already registered (by skill name in command)
+# Look for our hook in existing matcher groups
+# We need to check inside each group's "hooks" array
 already_registered = False
-for i, hook in enumerate(hooks):
-    if isinstance(hook, dict):
-        cmd = hook.get('command', '')
-    else:
-        cmd = str(hook)
+for group in matcher_groups:
+    if not isinstance(group, dict):
+        continue
     
-    if skill_name in cmd:
-        # Update existing hook
-        hooks[i] = our_hook
-        already_registered = True
-        print(f"Updated existing hook for {skill_name}")
+    handlers = group.get('hooks', [])
+    if not isinstance(handlers, list):
+        handlers = [handlers] if handlers else []
+        group['hooks'] = handlers
+    
+    for i, handler in enumerate(handlers):
+        if isinstance(handler, dict):
+            cmd = handler.get('command', '')
+            if skill_name in cmd:
+                # Update existing handler
+                handlers[i] = our_handler
+                already_registered = True
+                print("Updated existing hook for " + skill_name)
+                break
+    
+    if already_registered:
         break
 
 if not already_registered:
-    hooks.append(our_hook)
-    print(f"Registered new hook for {skill_name}")
+    # Add a new matcher group with our handler
+    # UserPromptSubmit has no matcher support, so we omit the matcher field
+    new_group = {
+        "hooks": [our_handler]
+    }
+    matcher_groups.append(new_group)
+    print("Registered new hook for " + skill_name)
 
 # Write back
 with open(settings_file, 'w') as f:
     json.dump(settings, f, indent=2)
 
-print(f"Hook registered in {settings_file}")
+print("Hook registered in " + settings_file)
 PYTHON_SCRIPT
     
     if [ $? -ne 0 ]; then

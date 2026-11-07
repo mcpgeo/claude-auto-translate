@@ -1,9 +1,11 @@
 """Configuration loading and validation for claude-auto-translate."""
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 DEFAULT_CONFIG = {
     "enabled": True,
@@ -14,7 +16,7 @@ DEFAULT_CONFIG = {
     "timeout_seconds": 10,
     "providers": {
         "anthropic": {
-            "model": "claude-3-haiku-20240307",
+            "model": "claude-haiku-5-5",
             "timeout_seconds": None,  # Use global timeout if None
         },
         "openai": {
@@ -22,7 +24,7 @@ DEFAULT_CONFIG = {
             "timeout_seconds": None,
         },
         "gemini": {
-            "model": "gemini-1.5-flash",
+            "model": "gemini-3.5-flash-lite",
             "timeout_seconds": None,
         },
         "deepl": {

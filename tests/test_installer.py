@@ -71,7 +71,7 @@ class TestInstallerIdempotency(unittest.TestCase):
         self.assertTrue(os.path.isfile(hook_file))
     
     def test_install_creates_settings_with_hook(self):
-        """Install should register hook in settings.json."""
+        """Install should register hook in settings.json with three-level nesting."""
         subprocess.run(
             ["bash", self.install_script],
             cwd=self.script_dir,
@@ -88,6 +88,17 @@ class TestInstallerIdempotency(unittest.TestCase):
         
         self.assertIn("hooks", settings)
         self.assertIn("UserPromptSubmit", settings["hooks"])
+        
+        # Verify three-level nesting per Claude Code docs
+        matcher_groups = settings["hooks"]["UserPromptSubmit"]
+        self.assertIsInstance(matcher_groups, list)
+        self.assertGreater(len(matcher_groups), 0)
+        
+        # Each matcher group should have a "hooks" array
+        group = matcher_groups[0]
+        self.assertIsInstance(group, dict)
+        self.assertIn("hooks", group)
+        self.assertIsInstance(group["hooks"], list)
     
     def test_install_idempotent_single_hook(self):
         """Running install twice should not duplicate hooks."""
@@ -105,18 +116,20 @@ class TestInstallerIdempotency(unittest.TestCase):
         with open(settings_file) as f:
             settings = json.load(f)
         
-        hooks = settings["hooks"]["UserPromptSubmit"]
+        matcher_groups = settings["hooks"]["UserPromptSubmit"]
         
-        # Count hooks containing our skill name
-        our_hooks = [
-            h for h in hooks
-            if isinstance(h, dict) and "claude-auto-translate" in h.get("command", "")
-        ]
+        # Count our handlers across all matcher groups
+        our_handlers = []
+        for group in matcher_groups:
+            if isinstance(group, dict) and "hooks" in group:
+                for handler in group["hooks"]:
+                    if isinstance(handler, dict) and "claude-auto-translate" in handler.get("command", ""):
+                        our_handlers.append(handler)
         
-        self.assertEqual(len(our_hooks), 1, f"Expected 1 hook, found {len(our_hooks)}")
+        self.assertEqual(len(our_handlers), 1, "Expected 1 hook handler, found {}".format(len(our_handlers)))
     
     def test_install_hook_has_correct_format(self):
-        """Hook should have correct format per Claude Code docs."""
+        """Hook should have correct three-level nested format per Claude Code docs."""
         subprocess.run(
             ["bash", self.install_script],
             cwd=self.script_dir,
@@ -129,25 +142,39 @@ class TestInstallerIdempotency(unittest.TestCase):
         with open(settings_file) as f:
             settings = json.load(f)
         
-        hooks = settings["hooks"]["UserPromptSubmit"]
-        our_hook = None
-        for h in hooks:
-            if isinstance(h, dict) and "claude-auto-translate" in h.get("command", ""):
-                our_hook = h
-                break
+        # Level 1: hook event
+        self.assertIn("UserPromptSubmit", settings["hooks"])
+        matcher_groups = settings["hooks"]["UserPromptSubmit"]
         
-        self.assertIsNotNone(our_hook)
+        # Level 2: matcher groups (array of objects)
+        self.assertIsInstance(matcher_groups, list)
+        self.assertGreater(len(matcher_groups), 0)
+        
+        # Find our group and handler
+        our_handler = None
+        for group in matcher_groups:
+            self.assertIsInstance(group, dict)
+            # Level 3: hooks array inside each group
+            self.assertIn("hooks", group)
+            self.assertIsInstance(group["hooks"], list)
+            
+            for handler in group["hooks"]:
+                if isinstance(handler, dict) and "claude-auto-translate" in handler.get("command", ""):
+                    our_handler = handler
+                    break
+        
+        self.assertIsNotNone(our_handler, "Our handler not found in nested structure")
         
         # Per Claude Code docs, command hooks need:
         # - type: "command"
         # - command: the command string
         # - timeout: in seconds (not milliseconds)
-        self.assertEqual(our_hook.get("type"), "command")
-        self.assertIn("command", our_hook)
-        self.assertIn("timeout", our_hook)
+        self.assertEqual(our_handler.get("type"), "command")
+        self.assertIn("command", our_handler)
+        self.assertIn("timeout", our_handler)
         
         # Timeout should be in seconds (reasonable value, not milliseconds)
-        timeout = our_hook.get("timeout")
+        timeout = our_handler.get("timeout")
         self.assertIsInstance(timeout, (int, float))
         self.assertGreater(timeout, 0)
         self.assertLess(timeout, 100)  # Should be seconds, not milliseconds
@@ -166,27 +193,34 @@ class TestInstallerIdempotency(unittest.TestCase):
         with open(settings_file) as f:
             settings = json.load(f)
         
-        hooks = settings["hooks"]["UserPromptSubmit"]
-        our_hook = None
-        for h in hooks:
-            if isinstance(h, dict) and "claude-auto-translate" in h.get("command", ""):
-                our_hook = h
-                break
+        # Find our handler in the nested structure
+        matcher_groups = settings["hooks"]["UserPromptSubmit"]
+        our_handler = None
+        for group in matcher_groups:
+            if isinstance(group, dict) and "hooks" in group:
+                for handler in group["hooks"]:
+                    if isinstance(handler, dict) and "claude-auto-translate" in handler.get("command", ""):
+                        our_handler = handler
+                        break
         
-        self.assertIsNotNone(our_hook)
+        self.assertIsNotNone(our_handler)
         
         # Command should end with || exit 0 to never exit 2 (which blocks prompt)
-        command = our_hook.get("command", "")
+        command = our_handler.get("command", "")
         self.assertIn("|| exit 0", command)
     
     def test_install_preserves_other_hooks(self):
-        """Install should not clobber existing hooks."""
-        # Create settings with an existing hook
+        """Install should not clobber existing hooks in other matcher groups."""
+        # Create settings with an existing hook in proper three-level structure
         settings_file = os.path.join(self.temp_home, ".claude", "settings.json")
         existing_settings = {
             "hooks": {
                 "UserPromptSubmit": [
-                    {"command": "echo 'other hook'", "timeout": 5000}
+                    {
+                        "hooks": [
+                            {"type": "command", "command": "echo 'other hook'", "timeout": 5}
+                        ]
+                    }
                 ]
             }
         }
@@ -204,17 +238,30 @@ class TestInstallerIdempotency(unittest.TestCase):
         with open(settings_file) as f:
             settings = json.load(f)
         
-        hooks = settings["hooks"]["UserPromptSubmit"]
+        matcher_groups = settings["hooks"]["UserPromptSubmit"]
         
-        # Should have both hooks
-        self.assertEqual(len(hooks), 2)
+        # Should have two matcher groups (one existing, one ours)
+        self.assertEqual(len(matcher_groups), 2)
         
-        # Original hook should be preserved
-        other_hooks = [
-            h for h in hooks
+        # Collect all handlers
+        all_handlers = []
+        for group in matcher_groups:
+            if isinstance(group, dict) and "hooks" in group:
+                all_handlers.extend(group["hooks"])
+        
+        # Original handler should be preserved
+        other_handlers = [
+            h for h in all_handlers
             if isinstance(h, dict) and "other hook" in h.get("command", "")
         ]
-        self.assertEqual(len(other_hooks), 1)
+        self.assertEqual(len(other_handlers), 1)
+        
+        # Our handler should be added
+        our_handlers = [
+            h for h in all_handlers
+            if isinstance(h, dict) and "claude-auto-translate" in h.get("command", "")
+        ]
+        self.assertEqual(len(our_handlers), 1)
     
     def test_install_creates_config_with_600_permissions(self):
         """Install should create config.json with chmod 600."""
@@ -263,7 +310,7 @@ class TestInstallerIdempotency(unittest.TestCase):
         self.assertEqual(config.get("custom_key"), "custom_value")
     
     def test_uninstall_removes_hook(self):
-        """Uninstall should remove hook from settings."""
+        """Uninstall should remove hook from settings (three-level structure)."""
         # First install
         subprocess.run(
             ["bash", self.install_script],
@@ -285,24 +332,34 @@ class TestInstallerIdempotency(unittest.TestCase):
         with open(settings_file) as f:
             settings = json.load(f)
         
-        # Check hooks are removed or empty
-        hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
-        our_hooks = [
-            h for h in hooks
-            if isinstance(h, dict) and "claude-auto-translate" in h.get("command", "")
-        ]
+        # Check hooks are removed - collect all handlers from nested structure
+        matcher_groups = settings.get("hooks", {}).get("UserPromptSubmit", [])
+        our_handlers = []
+        for group in matcher_groups:
+            if isinstance(group, dict) and "hooks" in group:
+                for handler in group["hooks"]:
+                    if isinstance(handler, dict) and "claude-auto-translate" in handler.get("command", ""):
+                        our_handlers.append(handler)
         
-        self.assertEqual(len(our_hooks), 0)
+        self.assertEqual(len(our_handlers), 0)
     
     def test_uninstall_preserves_other_hooks(self):
-        """Uninstall should not remove other hooks."""
-        # Create settings with our hook and another hook
+        """Uninstall should not remove other hooks (three-level structure)."""
+        # Create settings with our hook and another hook in proper three-level structure
         settings_file = os.path.join(self.temp_home, ".claude", "settings.json")
         settings = {
             "hooks": {
                 "UserPromptSubmit": [
-                    {"command": "echo 'other hook'", "timeout": 5000},
-                    {"command": "python3 claude-auto-translate/hook.py", "timeout": 15000}
+                    {
+                        "hooks": [
+                            {"type": "command", "command": "echo 'other hook'", "timeout": 5}
+                        ]
+                    },
+                    {
+                        "hooks": [
+                            {"type": "command", "command": "python3 claude-auto-translate/hook.py", "timeout": 15}
+                        ]
+                    }
                 ]
             }
         }
@@ -326,14 +383,26 @@ class TestInstallerIdempotency(unittest.TestCase):
         with open(settings_file) as f:
             settings = json.load(f)
         
-        hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
+        # Collect all handlers from nested structure
+        matcher_groups = settings.get("hooks", {}).get("UserPromptSubmit", [])
+        all_handlers = []
+        for group in matcher_groups:
+            if isinstance(group, dict) and "hooks" in group:
+                all_handlers.extend(group["hooks"])
         
         # Other hook should remain
-        other_hooks = [
-            h for h in hooks
+        other_handlers = [
+            h for h in all_handlers
             if isinstance(h, dict) and "other hook" in h.get("command", "")
         ]
-        self.assertEqual(len(other_hooks), 1)
+        self.assertEqual(len(other_handlers), 1)
+        
+        # Our hook should be removed
+        our_handlers = [
+            h for h in all_handlers
+            if isinstance(h, dict) and "claude-auto-translate" in h.get("command", "")
+        ]
+        self.assertEqual(len(our_handlers), 0)
     
     def test_uninstall_removes_skill_files(self):
         """Uninstall should remove skill files."""

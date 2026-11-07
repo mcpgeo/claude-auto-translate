@@ -47,7 +47,7 @@ class AnthropicProvider(TranslationProvider):
     API_URL = "https://api.anthropic.com/v1/messages"
     
     def translate(self, text: str, source_lang: str, target_lang: str) -> str:
-        model = self.config.get("model", "claude-3-haiku-20240307")
+        model = self.config.get("model", "claude-haiku-5-5")
         
         prompt = self._build_prompt(text, source_lang, target_lang)
         
@@ -142,7 +142,7 @@ class GeminiProvider(TranslationProvider):
     API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     
     def translate(self, text: str, source_lang: str, target_lang: str) -> str:
-        model = self.config.get("model", "gemini-1.5-flash")
+        model = self.config.get("model", "gemini-3.5-flash-lite")
         
         prompt = self._build_prompt(text, source_lang, target_lang)
         
