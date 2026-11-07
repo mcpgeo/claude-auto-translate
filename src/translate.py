@@ -1,5 +1,6 @@
 """Main translation orchestration for claude-auto-translate."""
 
+import json
 import sys
 from typing import Any, Dict, Optional, Tuple
 
@@ -10,6 +11,11 @@ from .detect import (
     should_translate,
 )
 from .providers import get_provider
+
+# Claude Code caps additionalContext at 10,000 characters
+MAX_CONTEXT_CHARS = 10000
+# Reserve some chars for the wrapper text
+CONTEXT_OVERHEAD = 500
 
 
 def warn(message: str) -> None:
@@ -41,6 +47,12 @@ def translate_prompt(
     
     # Check if text needs translation
     if not should_translate(prompt):
+        return None, None
+    
+    # Skip very long prompts that would exceed context limit after translation
+    max_translatable = MAX_CONTEXT_CHARS - CONTEXT_OVERHEAD
+    if len(prompt) > max_translatable:
+        warn(f"Prompt too long ({len(prompt)} chars, max {max_translatable}). Passing through unchanged.")
         return None, None
     
     # Get provider configuration
@@ -85,13 +97,82 @@ def translate_prompt(
         return None, None
 
 
+def build_additional_context(
+    translated: str,
+    config: Dict[str, Any]
+) -> str:
+    """
+    Build the additionalContext string for Claude.
+    
+    Args:
+        translated: The English translation of the prompt
+        config: Configuration dict
+    
+    Returns:
+        The context string to inject via additionalContext
+    """
+    user_lang = config.get("user_language", "Georgian")
+    
+    # Build the context for Claude (this goes into additionalContext)
+    context = (
+        f"The user wrote their prompt in {user_lang}. "
+        f"Here is the English translation:\n\n"
+        f"{translated}\n\n"
+        f"IMPORTANT: Respond to the user in {user_lang}."
+    )
+    
+    # Truncate if needed (should rarely happen due to earlier check)
+    if len(context) > MAX_CONTEXT_CHARS:
+        truncate_at = MAX_CONTEXT_CHARS - 100
+        context = context[:truncate_at] + "\n\n[Translation truncated due to length]"
+    
+    return context
+
+
+def build_system_message(
+    translated: str,
+    config: Dict[str, Any]
+) -> Optional[str]:
+    """
+    Build the systemMessage for bilingual mode (shown to user).
+    
+    Args:
+        translated: The English translation of the prompt
+        config: Configuration dict
+    
+    Returns:
+        The system message to show to user, or None if not in bilingual mode
+    """
+    display_mode = config.get("display_mode", "native")
+    
+    if display_mode != "bilingual":
+        return None
+    
+    # Truncate long translations for display
+    if len(translated) > 200:
+        display_translation = translated[:197] + "..."
+    else:
+        display_translation = translated
+    
+    return f"[Translation: {display_translation}]"
+
+
 def build_hook_output(
     translated: str,
     original: str,
     config: Dict[str, Any]
-) -> str:
+) -> Dict[str, Any]:
     """
-    Build the output to inject into Claude's context.
+    Build the complete hook output JSON object.
+    
+    Per Claude Code hooks docs, UserPromptSubmit hooks output:
+    {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "..."
+        },
+        "systemMessage": "..."  // optional, shown to user
+    }
     
     Args:
         translated: The English translation of the prompt
@@ -99,31 +180,24 @@ def build_hook_output(
         config: Configuration dict
     
     Returns:
-        The formatted output to return from the hook
+        The hook output dict to be JSON-serialized
     """
-    user_lang = config.get("user_language", "Georgian")
-    display_mode = config.get("display_mode", "native")
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": build_additional_context(translated, config)
+        }
+    }
     
-    # Build the instruction for Claude
-    instruction = (
-        f"[Translation Context]\n"
-        f"The user wrote their prompt in {user_lang}. "
-        f"Here is the English translation of their prompt:\n\n"
-        f"{translated}\n\n"
-        f"IMPORTANT: Respond to the user in {user_lang}. "
-        f"This is their preferred language."
-    )
+    # Add systemMessage for bilingual mode (shown to user in transcript)
+    system_msg = build_system_message(translated, config)
+    if system_msg:
+        output["systemMessage"] = system_msg
     
-    if display_mode == "bilingual":
-        instruction += (
-            f"\n\nAt the start of your response, briefly acknowledge the translation "
-            f"by showing: \"[Translation: {translated[:100]}{'...' if len(translated) > 100 else ''}]\""
-        )
-    
-    return instruction
+    return output
 
 
-def process_prompt(prompt: str) -> Optional[str]:
+def process_prompt(prompt: str) -> Optional[Dict[str, Any]]:
     """
     Main entry point for hook processing.
     
@@ -131,7 +205,7 @@ def process_prompt(prompt: str) -> Optional[str]:
         prompt: The user's prompt text
     
     Returns:
-        Context to inject, or None if no translation needed/possible.
+        Hook output dict to be JSON-serialized, or None if no translation needed/possible.
     """
     config = load_config()
     

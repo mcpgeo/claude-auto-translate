@@ -8,7 +8,17 @@ translates it to English, and injects translation context for Claude.
 Exit codes:
   0 - Success (translation injected or passthrough)
   
-On any error, the hook exits 0 to never block the user's prompt.
+IMPORTANT: Never exit with code 2 (blocks the prompt). Always exit 0.
+On any error, the hook exits 0 to let the original prompt through.
+
+Output format (per Claude Code hooks docs):
+{
+    "hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": "..."
+    },
+    "systemMessage": "..."  // optional, shown to user in bilingual mode
+}
 """
 
 import json
@@ -47,13 +57,8 @@ def main() -> int:
         result = process_prompt(prompt)
         
         if result:
-            # Output hook result as JSON
-            # Using "continue" with additional context
-            output = {
-                "result": "continue",
-                "context": result
-            }
-            print(json.dumps(output))
+            # Output hook result as JSON per Claude Code hooks documentation
+            print(json.dumps(result))
         
         return 0
     

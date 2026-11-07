@@ -11,7 +11,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.translate import (
     translate_prompt,
     build_hook_output,
+    build_additional_context,
+    build_system_message,
     process_prompt,
+    MAX_CONTEXT_CHARS,
 )
 
 
@@ -86,6 +89,18 @@ class TestTranslatePrompt(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIsNone(original)
     
+    def test_passthrough_for_very_long_prompt(self):
+        """Should return None for prompts that would exceed context limit."""
+        config = {"enabled": True}
+        
+        # Create a very long Georgian prompt
+        long_prompt = "გამარჯობა " * 2000  # Well over 10,000 chars
+        
+        result, original = translate_prompt(long_prompt, config)
+        
+        self.assertIsNone(result)
+        self.assertIsNone(original)
+    
     @patch("urllib.request.urlopen")
     def test_successful_translation(self, mock_urlopen):
         """Should return translation on success."""
@@ -154,11 +169,65 @@ class TestTranslatePrompt(unittest.TestCase):
         self.assertIsNone(original)
 
 
-class TestBuildHookOutput(unittest.TestCase):
-    """Test hook output building."""
+class TestBuildAdditionalContext(unittest.TestCase):
+    """Test additionalContext string building."""
     
-    def test_native_mode_output(self):
-        """Native mode should not include translation acknowledgment."""
+    def test_context_contains_translation(self):
+        """Context should contain the translation."""
+        config = {"user_language": "Georgian"}
+        
+        result = build_additional_context("Hello world", config)
+        
+        self.assertIn("Hello world", result)
+        self.assertIn("Georgian", result)
+        self.assertIn("Respond to the user in Georgian", result)
+    
+    def test_context_within_limit(self):
+        """Context should be within the 10,000 char limit."""
+        config = {"user_language": "Georgian"}
+        
+        result = build_additional_context("Hello world", config)
+        
+        self.assertLessEqual(len(result), MAX_CONTEXT_CHARS)
+
+
+class TestBuildSystemMessage(unittest.TestCase):
+    """Test systemMessage building for bilingual mode."""
+    
+    def test_native_mode_returns_none(self):
+        """Native mode should not produce a system message."""
+        config = {"display_mode": "native"}
+        
+        result = build_system_message("Hello", config)
+        
+        self.assertIsNone(result)
+    
+    def test_bilingual_mode_returns_message(self):
+        """Bilingual mode should produce a system message."""
+        config = {"display_mode": "bilingual"}
+        
+        result = build_system_message("Hello world", config)
+        
+        self.assertIsNotNone(result)
+        self.assertIn("[Translation:", result)
+        self.assertIn("Hello world", result)
+    
+    def test_bilingual_truncates_long_translation(self):
+        """Bilingual mode should truncate long translations."""
+        config = {"display_mode": "bilingual"}
+        
+        long_translation = "A" * 300
+        result = build_system_message(long_translation, config)
+        
+        self.assertIn("...", result)
+        self.assertLess(len(result), 250)
+
+
+class TestBuildHookOutput(unittest.TestCase):
+    """Test hook output JSON structure per Claude Code docs."""
+    
+    def test_output_has_correct_structure(self):
+        """Output must have hookSpecificOutput with hookEventName and additionalContext."""
         config = {
             "user_language": "Georgian",
             "display_mode": "native",
@@ -166,14 +235,25 @@ class TestBuildHookOutput(unittest.TestCase):
         
         result = build_hook_output("Hello", "გამარჯობა", config)
         
-        self.assertIn("[Translation Context]", result)
-        self.assertIn("Hello", result)
-        self.assertIn("Georgian", result)
-        self.assertIn("Respond to the user in Georgian", result)
-        self.assertNotIn("acknowledge the translation", result)
+        # Verify structure matches Claude Code hooks docs
+        self.assertIn("hookSpecificOutput", result)
+        self.assertIn("hookEventName", result["hookSpecificOutput"])
+        self.assertEqual(result["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
+        self.assertIn("additionalContext", result["hookSpecificOutput"])
     
-    def test_bilingual_mode_output(self):
-        """Bilingual mode should include translation acknowledgment."""
+    def test_native_mode_no_system_message(self):
+        """Native mode should not include systemMessage."""
+        config = {
+            "user_language": "Georgian",
+            "display_mode": "native",
+        }
+        
+        result = build_hook_output("Hello", "გამარჯობა", config)
+        
+        self.assertNotIn("systemMessage", result)
+    
+    def test_bilingual_mode_includes_system_message(self):
+        """Bilingual mode should include systemMessage for user display."""
         config = {
             "user_language": "Georgian",
             "display_mode": "bilingual",
@@ -181,8 +261,23 @@ class TestBuildHookOutput(unittest.TestCase):
         
         result = build_hook_output("Hello", "გამარჯობა", config)
         
-        self.assertIn("[Translation Context]", result)
-        self.assertIn("acknowledge the translation", result)
+        self.assertIn("systemMessage", result)
+        self.assertIn("[Translation:", result["systemMessage"])
+    
+    def test_output_is_json_serializable(self):
+        """Output must be JSON serializable."""
+        config = {
+            "user_language": "Georgian",
+            "display_mode": "bilingual",
+        }
+        
+        result = build_hook_output("Hello", "გამარჯობა", config)
+        
+        # Should not raise
+        json_str = json.dumps(result)
+        parsed = json.loads(json_str)
+        
+        self.assertEqual(parsed["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
 
 
 class TestProcessPrompt(unittest.TestCase):
@@ -207,6 +302,24 @@ class TestProcessPrompt(unittest.TestCase):
         result = process_prompt("გამარჯობა")
         
         self.assertIsNone(result)
+    
+    @patch("urllib.request.urlopen")
+    def test_returns_correct_json_structure(self, mock_urlopen):
+        """Should return dict with correct JSON structure per Claude Code docs."""
+        mock_response = MockResponse({
+            "content": [{"text": "Hello"}]
+        })
+        mock_urlopen.return_value = mock_response
+        
+        os.environ["ANTHROPIC_API_KEY"] = "test-key"
+        
+        result = process_prompt("გამარჯობა")
+        
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, dict)
+        self.assertIn("hookSpecificOutput", result)
+        self.assertEqual(result["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
+        self.assertIn("additionalContext", result["hookSpecificOutput"])
 
 
 if __name__ == "__main__":

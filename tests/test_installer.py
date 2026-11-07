@@ -115,6 +115,70 @@ class TestInstallerIdempotency(unittest.TestCase):
         
         self.assertEqual(len(our_hooks), 1, f"Expected 1 hook, found {len(our_hooks)}")
     
+    def test_install_hook_has_correct_format(self):
+        """Hook should have correct format per Claude Code docs."""
+        subprocess.run(
+            ["bash", self.install_script],
+            cwd=self.script_dir,
+            capture_output=True,
+            env={**os.environ, "HOME": self.temp_home}
+        )
+        
+        settings_file = os.path.join(self.temp_home, ".claude", "settings.json")
+        
+        with open(settings_file) as f:
+            settings = json.load(f)
+        
+        hooks = settings["hooks"]["UserPromptSubmit"]
+        our_hook = None
+        for h in hooks:
+            if isinstance(h, dict) and "claude-auto-translate" in h.get("command", ""):
+                our_hook = h
+                break
+        
+        self.assertIsNotNone(our_hook)
+        
+        # Per Claude Code docs, command hooks need:
+        # - type: "command"
+        # - command: the command string
+        # - timeout: in seconds (not milliseconds)
+        self.assertEqual(our_hook.get("type"), "command")
+        self.assertIn("command", our_hook)
+        self.assertIn("timeout", our_hook)
+        
+        # Timeout should be in seconds (reasonable value, not milliseconds)
+        timeout = our_hook.get("timeout")
+        self.assertIsInstance(timeout, (int, float))
+        self.assertGreater(timeout, 0)
+        self.assertLess(timeout, 100)  # Should be seconds, not milliseconds
+    
+    def test_install_hook_has_failsafe(self):
+        """Hook command should have || exit 0 failsafe to never block."""
+        subprocess.run(
+            ["bash", self.install_script],
+            cwd=self.script_dir,
+            capture_output=True,
+            env={**os.environ, "HOME": self.temp_home}
+        )
+        
+        settings_file = os.path.join(self.temp_home, ".claude", "settings.json")
+        
+        with open(settings_file) as f:
+            settings = json.load(f)
+        
+        hooks = settings["hooks"]["UserPromptSubmit"]
+        our_hook = None
+        for h in hooks:
+            if isinstance(h, dict) and "claude-auto-translate" in h.get("command", ""):
+                our_hook = h
+                break
+        
+        self.assertIsNotNone(our_hook)
+        
+        # Command should end with || exit 0 to never exit 2 (which blocks prompt)
+        command = our_hook.get("command", "")
+        self.assertIn("|| exit 0", command)
+    
     def test_install_preserves_other_hooks(self):
         """Install should not clobber existing hooks."""
         # Create settings with an existing hook

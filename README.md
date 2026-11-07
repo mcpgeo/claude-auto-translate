@@ -91,7 +91,9 @@ Configuration is stored in `~/.claude/skills/claude-auto-translate/config.json`.
 | `working_language` | string | `"English"` | AI's working language |
 | `display_mode` | string | `"native"` | `"native"` or `"bilingual"` |
 | `provider` | string | `"anthropic"` | Translation provider to use |
-| `timeout_seconds` | number | `10` | Global request timeout |
+| `timeout_seconds` | number | `10` | Global request timeout (seconds) |
+
+**Note:** The hook is registered with a 15-second timeout (slightly above the default 10s request timeout). Very long prompts (over ~9,500 characters) are passed through without translation to stay within Claude Code's 10,000-character context limit.
 
 ### Provider Configuration
 
@@ -137,7 +139,7 @@ Each provider can be configured under the `providers` key:
 
 ### Native Mode (default)
 
-Claude responds only in your native language:
+Claude responds only in your native language. The English translation is injected as context that Claude sees but isn't displayed to you.
 
 ```json
 {"display_mode": "native"}
@@ -145,16 +147,19 @@ Claude responds only in your native language:
 
 ### Bilingual Mode
 
-Claude includes a brief translation acknowledgment so you can verify the translation:
+In addition to the context for Claude, a `systemMessage` is shown to you in the transcript so you can verify the translation:
 
 ```json
 {"display_mode": "bilingual"}
 ```
 
-Example response start:
+Example message shown to you:
 ```
 [Translation: Please explain what this function does...]
+```
 
+Then Claude responds in your native language:
+```
 ეს ფუნქცია ითვლის ფაქტორიალს...
 ```
 

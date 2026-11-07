@@ -132,11 +132,17 @@ EOF
 #
 # Register hook in Claude Code settings.json
 #
+# Per Claude Code hooks docs:
+# - UserPromptSubmit hooks default to 30 seconds timeout
+# - Hook format: {"type": "command", "command": "...", "timeout": N}
+# - timeout is in seconds (not milliseconds)
+# - Never exit 2 (blocks prompt), so we add || exit 0 failsafe
+#
 register_hook() {
     local settings_file="$1"
     local hook_path="$2"
     
-    # Build the hook command with failsafe
+    # Build the hook command with failsafe (never exit 2)
     local hook_cmd="python3 \"$hook_path\" || exit 0"
     
     # Create settings file if it doesn't exist
@@ -168,10 +174,13 @@ except (json.JSONDecodeError, FileNotFoundError):
 if 'hooks' not in settings:
     settings['hooks'] = {}
 
-# Define our hook
+# Define our hook per Claude Code settings.json schema
+# timeout is in seconds; set to 15s (above the default 10s request timeout)
+# type: "command" is required for command hooks
 our_hook = {
+    "type": "command",
     "command": hook_cmd,
-    "timeout": 15000
+    "timeout": 15
 }
 
 # Get or create the UserPromptSubmit hooks array
