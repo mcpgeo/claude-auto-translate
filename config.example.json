@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "user_language": "Georgian",
+  "working_language": "English",
+  "display_mode": "native",
+  "provider": "anthropic",
+  "timeout_seconds": 10,
+  "providers": {
+    "anthropic": {
+      "model": "claude-haiku-5-5"
+    },
+    "openai": {
+      "model": "gpt-4o-mini"
+    },
+    "gemini": {
+      "model": "gemini-3.5-flash-lite"
+    },
+    "deepl": {},
+    "google_cloud": {}
+  }
+}

@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Display Python version
+        run: python --version
+      
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      
+      - name: Test installer idempotency
+        run: |
+          # Create a temporary HOME
+          export TEST_HOME=$(mktemp -d)
+          export HOME=$TEST_HOME
+          
+          # First install
+          bash install.sh
+          
+          # Check files exist
+          test -f "$HOME/.claude/skills/claude-auto-translate/hook.py"
+          test -f "$HOME/.claude/settings.json"
+          
+          # Second install (idempotency check)
+          bash install.sh
+          
+          # Count our hooks - should be exactly 1
+          HOOK_COUNT=$(python3 -c "
+          import json
+          with open('$HOME/.claude/settings.json') as f:
+              settings = json.load(f)
+          hooks = settings.get('hooks', {}).get('UserPromptSubmit', [])
+          count = sum(1 for h in hooks if isinstance(h, dict) and 'claude-auto-translate' in h.get('command', ''))
+          print(count)
+          ")
+          
+          if [ "$HOOK_COUNT" != "1" ]; then
+            echo "Expected 1 hook, found $HOOK_COUNT"
+            exit 1
+          fi
+          
+          echo "Idempotency test passed!"
+          
+          # Test uninstall
+          bash uninstall.sh
+          
+          # Verify hook removed
+          HOOK_COUNT=$(python3 -c "
+          import json
+          with open('$HOME/.claude/settings.json') as f:
+              settings = json.load(f)
+          hooks = settings.get('hooks', {}).get('UserPromptSubmit', [])
+          count = sum(1 for h in hooks if isinstance(h, dict) and 'claude-auto-translate' in h.get('command', ''))
+          print(count)
+          ")
+          
+          if [ "$HOOK_COUNT" != "0" ]; then
+            echo "Expected 0 hooks after uninstall, found $HOOK_COUNT"
+            exit 1
+          fi
+          
+          echo "Uninstall test passed!"
+          
+          # Cleanup
+          rm -rf "$TEST_HOME"
+      
+      - name: Lint with basic checks
+        run: |
+          # Check Python syntax
+          python -m py_compile hook.py
+          python -m py_compile src/config.py
+          python -m py_compile src/detect.py
+          python -m py_compile src/providers.py
+          python -m py_compile src/translate.py
+          echo "Syntax check passed!"
